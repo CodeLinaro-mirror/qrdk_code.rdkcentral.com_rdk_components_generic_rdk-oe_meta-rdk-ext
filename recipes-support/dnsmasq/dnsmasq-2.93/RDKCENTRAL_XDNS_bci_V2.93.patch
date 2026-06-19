@@ -1,0 +1,203 @@
+From d8c8e47270c0075b5523c30224c203e686ad7965 Mon Sep 17 00:00:00 2001
+From: "S, Sherin Jasper" <SherinJasper_SudhakerVincent@comcast.com>
+Date: Sat, 26 Sep 2026 19:16:02 +0530
+Subject: [PATCH] Fix BCI XDNS server failover state
+
+
+diff --git a/src/dhcp-protocol.h b/src/dhcp-protocol.h
+index adf8d08..da9a284 100644
+--- a/src/dhcp-protocol.h
++++ b/src/dhcp-protocol.h
+@@ -99,6 +99,7 @@
+ #define BRDBAND_FORUM_IANA       3561 /* Broadband forum IANA enterprise */
+ 
+ #define DHCP_CHADDR_MAX 16
++#define DHCP_STR_MAC_MAX 17
+ 
+ struct dhcp_packet {
+   u8 op, htype, hlen, hops;
+diff --git a/src/dnsmasq.h b/src/dnsmasq.h
+index aeb7e17..c822016 100644
+--- a/src/dnsmasq.h
++++ b/src/dnsmasq.h
+@@ -1380,7 +1380,12 @@ extern struct daemon {
+   struct server *dns_override_server2;
+   int protected_browsing_enable;
+   int use_xdns_refactor_code;
++  int XDNS_MultiProfile_Flag;
+   struct server_lists *xdns_server_lists;
++  struct server *last_good_serverv4;
++  struct server *last_good_serverv6;
++  int forwardcount_server4;
++  int forwardcount_server6;
+   int xdns_server_lists_count;
+   int xdns_default_list_no;
+   int xdns_forward_list_no;
+diff --git a/src/edns0.c b/src/edns0.c
+index 98e567b..568ff0c 100644
+--- a/src/edns0.c
++++ b/src/edns0.c
+@@ -388,6 +388,28 @@ static size_t add_cpe_tag(struct dns_header *header, size_t plen, size_t outlen,
+        return add_pseudoheader(header, plen, outlen, EDNS0_OPTION_NOMCPEID, cpetag, strlen(cpetag), 0, 1);
+ }
+ 
++static size_t add_multiprofile_option(struct dns_header *header, size_t plen, size_t outlen, union mysockaddr *l3, time_t now)
++{
++  unsigned char mac[DHCP_CHADDR_MAX] = {0};
++  unsigned char strmac[DHCP_STR_MAC_MAX] = {0};
++  int maclen = 0;
++
++  if ((maclen = find_mac(l3, mac, 1, now)) != 0)
++    {
++      strncpy(strmac, print_mac(mac, maclen), DHCP_STR_MAC_MAX - 1);
++      strmac[DHCP_STR_MAC_MAX - 1] = '\0';
++      my_syslog(LOG_DEBUG, _("#### XDNS add_multiprofile_option() strmac:%s"), strmac);
++      plen = add_pseudoheader(header, plen, outlen, EDNS0_OPTION_NOMDEVICEID, strmac, DHCP_STR_MAC_MAX, 0, 0);
++    }
++  else
++    {
++      my_syslog(LOG_DEBUG, _("#### XDNS add_multiprofile_option() Could not find MAC from l3 sockaddr !!!"));
++      reset_option_dnsoverride();
++    }
++
++  return plen;
++}
++
+ // XDNS
+ void set_option_dnsoverride()
+ {
+@@ -816,6 +838,9 @@ size_t add_edns0_config(struct dns_header *header, size_t plen, size_t outlen,
+ 
+   /* <XDNS> */
+   plen = add_xdns_server(header, plen, outlen, source, now);
++  /* <XDNS Multiprofile> */
++  if (daemon->XDNS_MultiProfile_Flag)
++    plen = add_multiprofile_option(header, plen, outlen, source, now);
+   /* </XDNS> */
+ 
+   if (daemon->dns_client_id)
+diff --git a/src/forward.c b/src/forward.c
+index 7f9d765..78279d6 100644
+--- a/src/forward.c
++++ b/src/forward.c
+@@ -176,6 +176,7 @@ static void forward_query(int udpfd, union mysockaddr *udpaddr,
+   int first, last, start = 0;
+   int forwarded = 0;
+   int ede = EDE_UNSET;
++	int query_ip_type;
+   unsigned short rrtype, rrclass;
+ 
+   gotname = extract_request(header, plen, daemon->namebuff, &rrtype, &rrclass);
+@@ -422,15 +423,59 @@ static void forward_query(int udpfd, union mysockaddr *udpaddr,
+       if (option_bool(OPT_ALL_SERVERS))
+ 	forward->forwardall = 1;
+ 
++	query_ip_type = (forward->frec_src.source.sa.sa_family == AF_INET6) ? 6 : 4;
++	if (daemon->use_xdns_refactor_code)
++	  daemon->ip_type = query_ip_type;
++
+       if (!option_bool(OPT_ORDER))
+ 	{
++	  struct server *good_serverv4 = NULL;
++	  struct server *good_serverv6 = NULL;
+ 	  if (master->forwardcount++ > FORWARD_TEST ||
+ 	      difftime(now, master->forwardtime) > FORWARD_TIME ||
+-	      master->last_server == -1)
++	      daemon->forwardcount_server4++ > FORWARD_TEST || daemon->forwardcount_server6++ > FORWARD_TEST ||
++	      difftime(now, master->forwardtime) == 0 ||
++	      master->last_server == -1 && (!daemon->last_good_serverv4 || !daemon->last_good_serverv6))
+ 	    {
+ 	      master->forwardtime = now;
+ 	      master->forwardcount = 0;
+ 	      forward->forwardall = 1;
++	      daemon->forwardcount_server4 = 0;
++	      daemon->forwardcount_server6 = 0;
++	      daemon->last_good_serverv4 = NULL;
++	      daemon->last_good_serverv6 = NULL;
++	    }
++	  else if (master->last_server != -1 && (daemon->last_good_serverv4 || daemon->last_good_serverv6) && difftime(now, master->forwardtime) < FORWARD_TIME)
++	    {
++	      if (daemon->ip_type == 4 && daemon->last_good_serverv4)
++		{
++		  good_serverv4 = daemon->last_good_serverv4;
++		  start = good_serverv4->arrayposn;
++		  forward->forwardall = 0;
++		}
++	      else if (daemon->ip_type == 6 && daemon->last_good_serverv6)
++		{
++		  good_serverv6 = daemon->last_good_serverv6;
++		  start = good_serverv6->arrayposn;
++		  forward->forwardall = 0;
++		}
++	      else
++		{
++		  forward->forwardall = 1;
++		  daemon->forwardcount_server4 = 0;
++		  daemon->forwardcount_server6 = 0;
++		  master->forwardtime = now;
++		  daemon->last_good_serverv4 = NULL;
++		  daemon->last_good_serverv6 = NULL;
++		}
++	    }
++	  else if (!daemon->last_good_serverv4 && !daemon->last_good_serverv6)
++	    {
++	      start = first;
++	      forward->forwardall = 1;
++	      daemon->forwardcount_server4 = 0;
++	      daemon->forwardcount_server6 = 0;
++	      master->forwardtime = now;
+ 	    }
+ 	  else
+ 	    start = master->last_server;
+@@ -518,6 +563,9 @@ static void forward_query(int udpfd, union mysockaddr *udpaddr,
+ 
+   forwarded = 0;
+ 
++	if (daemon->use_xdns_refactor_code)
++		daemon->ip_type = query_ip_type;
++
+   /* Advertise the size of UDP reply we can accept. */
+   plen = add_pseudoheader(header, plen, daemon->edns_pktsz, 0, NULL, 0, 0, 0);
+ 
+@@ -1467,7 +1515,14 @@ void reply_query(int fd, time_t now)
+      the same local socket, and would like to know which one has answered. */
+   for (c = first; c != last; c++)
+     if (sockaddr_isequal(&daemon->serverarray[c]->addr, &serveraddr))
+-      break;
++      {
++	server = daemon->serverarray[c];
++	if (server->addr.sa.sa_family == AF_INET)
++	  daemon->last_good_serverv4 = server;
++	else if (server->addr.sa.sa_family == AF_INET6)
++	  daemon->last_good_serverv6 = server;
++	break;
++      }
+   
+   if (c == last)
+     return;
+diff --git a/src/network.c b/src/network.c
+index ab20604..ef927ec 100644
+--- a/src/network.c
++++ b/src/network.c
+@@ -2122,6 +2122,8 @@ int reload_servers(char *fname)
+   size_t linesz = 0;
+   int gotone = 0;
+   /* XDNS - dns override servers record */
++  daemon->last_good_serverv4 = NULL;
++  daemon->last_good_serverv6 = NULL;
+   struct dnsoverride_record *prec = NULL;
+   daemon->xdns_server_lists = NULL;
+ 
+@@ -2146,6 +2148,12 @@ int reload_servers(char *fname)
+       if (!token)
+ 	continue;
+ 
++      if (!strcmp(token, "XDNS_Multi_Profile"))
++  {
++    char *ProfileEnable = strtok(NULL, " \t\n\r");
++    daemon->XDNS_MultiProfile_Flag = ProfileEnable && !strcmp(ProfileEnable, "Enabled");
++  }
++
+       if (strcmp(token, "nameserver") != 0 && strcmp(token, "server") != 0 && strcmp(token, "dnsoverride") != 0)
+ 	continue;
+ 
