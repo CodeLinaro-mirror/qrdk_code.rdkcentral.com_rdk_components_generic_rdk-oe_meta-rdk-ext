@@ -6,7 +6,7 @@ HOMEPAGE = "https://github.com/Comcast/aker"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=e3fc50a88d0a364313df4b21ef20c29e"
 
-SRCREV = "ebbf31be22b1cc7928bed070fe84ecdc7191c4c2"
+SRCREV = "006a49ca2fb9c17fe70589af52e63328b5e450f8"
 SRC_URI = "git://github.com/xmidt-org/aker.git;branch=main;protocol=https"
 SRC_URI += "file://aker-01.patch"
 SRC_URI += "file://drop_root_aker.patch"
@@ -16,7 +16,7 @@ S = "${WORKDIR}/git"
 
 ASNEEDED = ""
 
-DEPENDS = "libparodus wrp-c trower-base64 msgpack-c rdk-logger log4c util-linux libunpriv"
+DEPENDS = "libparodus wrp-c trower-base64 msgpack-c rdk-logger log4c util-linux libunpriv rbus"
 DEPENDS_append = " ${@bb.utils.contains('DISTRO_FEATURES', 'telemetry2_0', 'telemetry', '', d)}"
 
 CFLAGS_append = " \
@@ -26,10 +26,11 @@ CFLAGS_append = " \
     -I${STAGING_INCDIR}/wrp-c \
     -I${STAGING_INCDIR}/cimplog \
     -I${STAGING_INCDIR}/trower-base64 \
+    -I${STAGING_INCDIR}/rbus \
     "
 CFLAGS_append = " ${@bb.utils.contains('DISTRO_FEATURES', 'telemetry2_0', '-DENABLE_FEATURE_TELEMETRY2_0', '', d)}"
 LDFLAGS_append = " ${@bb.utils.contains('DISTRO_FEATURES', 'telemetry2_0', ' -ltelemetry_msgsender ', '', d)}"
-LDFLAGS_append = " -lprivilege"
+LDFLAGS_append = " -lprivilege -lrbus"
 
 inherit pkgconfig coverity cmake
 EXTRA_OECMAKE = "-DBUILD_TESTING=OFF -DBUILD_YOCTO=true"
