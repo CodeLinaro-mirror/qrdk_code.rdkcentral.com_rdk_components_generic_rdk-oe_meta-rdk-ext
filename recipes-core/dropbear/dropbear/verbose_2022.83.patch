@@ -1,0 +1,38 @@
+diff --git a/cli-session.c b/cli-session.c
+index 5981b24..ae68c5b 100644
+--- a/cli-session.c
++++ b/cli-session.c
+@@ -207,6 +207,7 @@ static void recv_msg_service_accept(void) {
+  * service, userauth and channel requests */
+ static void cli_sessionloop() {
+ 
++	FILE *pidfile = NULL;
+ 	TRACE2(("enter cli_sessionloop"))
+ 
+ 	if (ses.lastpacket == 0) {
+@@ -290,6 +291,12 @@ static void cli_sessionloop() {
+ 					dropbear_exit("Backgrounding failed: %d %s", 
+ 							errno, strerror(errno));
+ 				}
++
++				pidfile = fopen("/var/tmp/rssh.pid", "w");
++				if (pidfile) {
++					fprintf(pidfile, "%d\n", getpid());
++					fclose(pidfile);
++				}
+ 			}
+ 			
+ #if DROPBEAR_CLI_NETCAT
+diff --git a/default_options.h b/default_options.h
+index 00674dd..13d5f4d 100644
+--- a/default_options.h
++++ b/default_options.h
+@@ -56,7 +56,7 @@ IMPORTANT: Some options will require "make clean" after changes */
+  * TRACE1 - TRACE3 = approx 4 Kb (connection, remote identity, algos, auth type info)
+  * TRACE4 = approx 17 Kb (detailed before connection)
+  * TRACE5 = approx 8 Kb (detailed after connection) */
+-#define DEBUG_TRACE 0
++#define DEBUG_TRACE 1
+ 
+ /* Set this if you want to use the DROPBEAR_SMALL_CODE option. This can save
+  * several kB in binary size however will make the symmetrical ciphers and hashes

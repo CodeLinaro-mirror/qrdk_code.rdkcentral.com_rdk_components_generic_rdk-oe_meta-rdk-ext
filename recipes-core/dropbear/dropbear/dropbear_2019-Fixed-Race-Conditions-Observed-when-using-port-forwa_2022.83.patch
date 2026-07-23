@@ -1,0 +1,32 @@
+diff --git a/cli-session.c b/cli-session.c
+index ae68c5b..e29cb2c 100644
+--- a/cli-session.c
++++ b/cli-session.c
+@@ -277,6 +277,13 @@ static void cli_sessionloop() {
+ 			}
+ #endif
+ 
++#if DROPBEAR_CLI_LOCALTCPFWD
++			setup_localtcp();
++#endif
++#if DROPBEAR_CLI_REMOTETCPFWD
++			setup_remotetcp();
++#endif
++
+ 			if (cli_opts.backgrounded) {
+ 				int devnull;
+ 				/* keeping stdin open steals input from the terminal and
+@@ -308,13 +315,6 @@ static void cli_sessionloop() {
+ 				cli_send_chansess_request();
+ 			}
+ 
+-#if DROPBEAR_CLI_LOCALTCPFWD
+-			setup_localtcp();
+-#endif
+-#if DROPBEAR_CLI_REMOTETCPFWD
+-			setup_remotetcp();
+-#endif
+-
+ 			TRACE(("leave cli_sessionloop: running"))
+ 			cli_ses.state = SESSION_RUNNING;
+ 			return;

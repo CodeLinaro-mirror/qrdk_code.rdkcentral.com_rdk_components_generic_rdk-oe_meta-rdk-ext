@@ -1,0 +1,57 @@
+diff --git a/svr-authpubkey.c b/svr-authpubkey.c
+index 15eb7ed..428db32 100644
+--- a/svr-authpubkey.c
++++ b/svr-authpubkey.c
+@@ -65,6 +65,7 @@
+ #include "packet.h"
+ #include "algo.h"
+ #include "runopts.h"
++#include <telemetry_busmessage_sender.h>
+ 
+ #if DROPBEAR_SVR_PUBKEY_AUTH
+ 
+@@ -212,6 +213,7 @@ void svr_auth_pubkey(int valid_user) {
+ 	/* ... and finally verify the signature */
+ 	fp = sign_key_fingerprint(keyblob, keybloblen);
+ 	if (buf_verify(ses.payload, key, sigtype, signbuf) == DROPBEAR_SUCCESS) {
++		ssh_logging("SSH_connection_split %s\n", ses.authstate.pw_name);
+ 		if (svr_opts.multiauthmethod && (ses.authstate.authtypes & ~AUTH_TYPE_PUBKEY)) {
+ 			/* successful pubkey authentication, but extra auth required */
+ 			dropbear_log(LOG_NOTICE,
+@@ -237,6 +239,7 @@ void svr_auth_pubkey(int valid_user) {
+                 }
+ #endif
+ 	} else {
++		ssh_logging("Illegal_SSH_connection %s\n", ses.authstate.pw_name);
+ 		dropbear_log(LOG_WARNING,
+ 				"Pubkey auth bad signature for '%s' with key %s from %s",
+ 				ses.authstate.pw_name, fp, svr_ses.addrstring);
+diff --git a/svr-main.c b/svr-main.c
+index 9234361..b99788d 100644
+--- a/svr-main.c
++++ b/svr-main.c
+@@ -30,6 +30,8 @@
+ #include "runopts.h"
+ #include "dbrandom.h"
+ #include "crypto_desc.h"
++#include <telemetry_busmessage_sender.h>
++#define COMP_NAME "dropbear-server"
+ 
+ static size_t listensockets(int *sock, size_t sockcount, int *maxfd);
+ static void sigchld_handler(int dummy);
+@@ -53,6 +55,7 @@ int main(int argc, char ** argv)
+ 	_dropbear_exit = svr_dropbear_exit;
+ 	_dropbear_log = svr_dropbear_log;
+ 
++	t2_init(COMP_NAME);
+ 	disallow_core();
+ 
+ 	if (argc < 1) {
+@@ -88,6 +91,7 @@ int main(int argc, char ** argv)
+ 	/* notreached */
+ #endif
+ 
++	t2_uninit();
+ 	dropbear_exit("Compiled without normal mode, can't run without -i\n");
+ 	return -1;
+ }
